@@ -1,226 +1,104 @@
-#include <Arduino.h>
-#include <ESPAsyncWebServer.h>
-#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_MPR121.h>
+#include <U8g2lib.h>
 
-const char *ssid = "Elements";
-const char *password = "Elements@@2024!";
+U8G2_SSD1306_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
-const int botaoSubirPin = 2;
-const int botaoDescerPin = 3;
-const int fimDeCursoSuperiorPin = 5;
-const int fimDeCursoInferiorPin = 4;
-const int releSubirPin = 26;  // Pino GPIO para controle do relé de subida
-const int releDescerPin = 27; // Pino GPIO para controle do relé de descida
-const int ledIndicativoPin = 13; // Pino GPIO para o LED indicativo
+Adafruit_MPR121 touch;
+unsigned int variavel = 90;
+uint16_t lastTouched = 0;
+bool portaTocadaAnteriormente[12] = {false};  // Array para rastrear o estado anterior de cada porta
+unsigned long ultimaAlteracao = 0;
+bool tela = true;
 
-AsyncWebServer server(80);
+void draw(void) {
+    u8g2.setFont(u8g2_font_inb30_mr);
+    
+    // Centraliza o valor da variável no meio da tela
+    String variavelStr = String(variavel);
+    const char* variavelChar = variavelStr.c_str();
 
-// Estados da mesa
-enum EstadoMesa
-{
-  Parada,
-  Subindo,
-  Descendo
-};
-
-EstadoMesa estadoAtual = Parada;
-
-// Tempos de acionamento disponíveis
-const int temposAcionamento[] = {500, 1000, 2000, 3000};
-int tempoSelecionado = 2000; // Tempo padrão: 2 segundos
-
-// Protótipos das funções
-void desligarReles();
-String obterEstadoMesa();
-void acionarReleSubir();
-void acionarReleDescer();
-void acionarLedIndicativo();
-void desligarLedIndicativo();
-void pararMesa();
-void definirTempoAcionamento(int tempo);
-
-unsigned long tempoInicioAcionamento = 0;
-unsigned long duracaoAcionamentoPadrao = 2000; // 2 segundos
-
-void setup()
-{
-  Serial.begin(9600);
-
-  pinMode(botaoSubirPin, INPUT_PULLUP);
-  pinMode(botaoDescerPin, INPUT_PULLUP);
-  pinMode(fimDeCursoSuperiorPin, INPUT_PULLUP);
-  pinMode(fimDeCursoInferiorPin, INPUT_PULLUP);
-  pinMode(releSubirPin, OUTPUT);
-  pinMode(releDescerPin, OUTPUT);
-  pinMode(ledIndicativoPin, OUTPUT);
-
-  // Inicia com os relés desligados e o LED indicativo apagado
-  desligarReles();
-  desligarLedIndicativo();
-
-  Serial.println("Iniciando conexão Wi-Fi...");
-
-  // Conectar-se à rede Wi-Fi
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(1000);
-    Serial.println("Conectando à rede Wi-Fi...");
-  }
-
-  Serial.println("Conectado à rede Wi-Fi");
-  Serial.print("Endereço IP do ESP32: ");
-  Serial.println(WiFi.localIP());
-
-  // Configura as rotas do servidor web
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    String html = "<html><head><meta charset='UTF-8'>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
-    html += "<style>";
-    html += "body { font-family: 'Arial', sans-serif; text-align: center; background-color: #f4f4f4; }";
-    html += "h1 { color: #333; }";
-    html += "button { font-size: 2em; padding: 10px 20px; margin: 10px; border: none; border-radius: 5px; cursor: pointer; }";
-    html += "button.subir { background-color: #3498db; color: white; }";
-    html += "button.descer { background-color: #3498db; color: white; }";
-    html += "button.emergencia { background-color: #e74c3c; color: white; }";
-    html += ".logo { max-width: 100%; height: auto; }";
-    html += "</style></head><body>";
-    html += "<img src='https://elements.com.br/cdn/shop/files/Group_1.png?v=1702562143&width=50' alt='Logo' class='logo'>";
-    html += "<h1>Teste Protótipo Misch</h1>";
-    html += "<p>Estado Atual: " + obterEstadoMesa() + "</p>";
-    html += "<form action='/subir' method='post'><button class='subir' type='submit'>Subir Mesa</button></form>";
-    html += "<form action='/descer' method='post'><button class='descer' type='submit'>Descer Mesa</button></form>";
-    html += "<form action='/parar' method='post'><button class='emergencia' type='submit'>STOP</button></form>";
-    html += "<p>Tempo de Acionamento: ";
-    html += "<select onchange='this.form.submit()' name='tempo'>";
-    for (int i = 0; i < sizeof(temposAcionamento) / sizeof(temposAcionamento[0]); i++)
-    {
-      html += "<option value='" + String(temposAcionamento[i]) + "' " + (temposAcionamento[i] == tempoSelecionado ? "selected" : "") + ">" + String(temposAcionamento[i] / 1000.0) + " segundos</option>";
+    int x = (128 - u8g2.getStrWidth(variavelChar)) / 2;
+    int y = 42;  // Altura central da tela
+    
+    if(tela == true) u8g2.drawStr(x, y, variavelChar);
+    else {
+      u8g2.drawStr(x, y, "  ");
+      u8g2.clearBuffer(); // Limpa o buffer
+      u8g2.sendBuffer();  // Envia o buffer limpo para o display
     }
-    html += "</select></p>";
-    html += "</body></html>";
-    request->send(200, "text/html", html);
-  });
+}
 
-  // Rota para subir a mesa
-  server.on("/subir", HTTP_POST, [](AsyncWebServerRequest *request) {
-    if (digitalRead(fimDeCursoSuperiorPin) == HIGH)
-    {
-      acionarReleSubir();
+
+void setup() {
+    /*Serial.begin(115200);
+    while (!Serial);*/
+
+    Serial.println("MPR121 Capacitive Touch Test");
+
+    if (!touch.begin()) {
+        Serial.println("Error initializing MPR121");
+        while (1);
     }
-    request->redirect("/");
-  });
+    touch.setThresholds(2, 0);  // Ajuste de limiar de toque e liberação
 
-  // Rota para descer a mesa
-  server.on("/descer", HTTP_POST, [](AsyncWebServerRequest *request) {
-    if (digitalRead(fimDeCursoInferiorPin) == HIGH)
-    {
-      acionarReleDescer();
+    u8g2.begin();
+    
+        ultimaAlteracao = millis();
+}
+
+void loop() {
+    uint16_t currentlyTouched = touch.touched();
+
+    // Verifica se houve uma mudança no estado de toque para qualquer porta
+    if (currentlyTouched != lastTouched) {
+        Serial.print("currentlyTouched: ");
+        Serial.print(currentlyTouched, BIN);
+        Serial.print("  lastTouched: ");
+        Serial.print(lastTouched, BIN);
+        Serial.print(" -  var: ");
+        Serial.println(variavel);
+
+        for (uint8_t i = 0; i < 12; i++) {
+            // Verifica se a porta atual mudou de estado
+            if ((currentlyTouched & (1 << i)) != (lastTouched & (1 << i))) {
+                if (currentlyTouched & (1 << i)) {
+                    tela = true;
+                    // Porta está sendo tocada agora
+                    portaTocadaAnteriormente[i] = true;
+
+                    // Determina a direção do toque
+                    if (i > 0 && i < 11) {
+                        // Transição em outras portas
+                        if (portaTocadaAnteriormente[i - 1]) {
+                            // Transição para uma porta maior (descendo)
+                            if (variavel > 55) variavel -= 1;
+                        } else if (portaTocadaAnteriormente[i + 1]) {
+                            // Transição para uma porta menor (subindo)
+                            if (variavel < 120) variavel += 1;
+                        }
+                    }
+                    // Atualiza o tempo da última alteração
+                    ultimaAlteracao = millis();
+                } else {
+                    // Porta não está mais sendo tocada
+                    portaTocadaAnteriormente[i] = false;
+                }
+            }
+        }
+
+        lastTouched = currentlyTouched;
+       
     }
-    request->redirect("/");
-  });
+         u8g2.firstPage();
+         do {
+          draw();
+         } while (u8g2.nextPage());
+    
 
-  // Rota para parar a mesa
-  server.on("/parar", HTTP_POST, [](AsyncWebServerRequest *request) {
-    pararMesa();
-    request->redirect("/");
-  });
-
-  // Configura o tempo de acionamento quando a seleção é alterada
-  server.on("/tempo", HTTP_POST, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("tempo"))
-    {
-      tempoSelecionado = request->getParam("tempo")->value().toInt();
-      definirTempoAcionamento(tempoSelecionado);
+    // Verifica se passaram 5 segundos desde a última alteração
+    if (millis() - ultimaAlteracao > 2000) {
+        tela = false;
+        Serial.println("Apagar display");
     }
-    request->redirect("/");
-  });
-
-  // Inicia o servidor
-  server.begin();
-}
-
-void loop()
-{
-  // Adicione qualquer lógica adicional necessária aqui
-  if (tempoInicioAcionamento > 0 && millis() - tempoInicioAcionamento >= tempoSelecionado)
-  {
-    // Se o tempo de acionamento expirou, desliga os relés
-    desligarReles();
-  }
-
-  // Verifica o estado da mesa para ligar/desligar o LED indicativo
-  switch (estadoAtual)
-  {
-  case Parada:
-    acionarLedIndicativo();
-    break;
-  default:
-    desligarLedIndicativo();
-    break;
-  }
-}
-
-String obterEstadoMesa()
-{
-  switch (estadoAtual)
-  {
-  case Parada:
-    return "Mesa parada";
-  case Subindo:
-    return "Mesa subindo";
-  case Descendo:
-    return "Mesa descendo";
-  default:
-    return "Estado desconhecido";
-  }
-}
-
-void acionarReleSubir()
-{
-  digitalWrite(releSubirPin, HIGH);
-  digitalWrite(releDescerPin, LOW);
-  tempoInicioAcionamento = millis(); // Inicia o temporizador de acionamento
-  estadoAtual = Subindo;
-}
-
-void acionarReleDescer()
-{
-  digitalWrite(releSubirPin, LOW);
-  digitalWrite(releDescerPin, HIGH);
-  tempoInicioAcionamento = millis(); // Inicia o temporizador de acionamento
-  estadoAtual = Descendo;
-}
-
-void pararMesa()
-{
-  digitalWrite(releSubirPin, LOW);
-  digitalWrite(releDescerPin, LOW);
-  estadoAtual = Parada;
-}
-
-void desligarReles()
-{
-  pararMesa();
-  tempoInicioAcionamento = 0; // Reseta o temporizador de acionamento
-}
-
-void acionarLedIndicativo()
-{
-  if (digitalRead(releSubirPin) == LOW && digitalRead(releDescerPin) == LOW)
-  {
-    digitalWrite(ledIndicativoPin, HIGH);
-  }
-}
-
-void desligarLedIndicativo()
-{
-  digitalWrite(ledIndicativoPin, LOW);
-}
-
-void definirTempoAcionamento(int tempo)
-{
-  duracaoAcionamentoPadrao = tempo;
 }
