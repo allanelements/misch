@@ -1,14 +1,10 @@
 #include <Wire.h>
 #include <Adafruit_MPR121.h>
 #include <U8g2lib.h>
-#include <ESP32Encoder.h>
+#include <EEPROM.h>
 
-// Definindo os pinos do encoder
-#define ENCODER_CLK_PIN 27  // Pino CLK do encoder
-#define ENCODER_DT_PIN 26   // Pino DT do encoder
-
-// Criando uma instância do encoder
-ESP32Encoder encoder;
+int endereco = 0; // Endereço na EEPROM para armazenar a variável
+const int hallPin = 4;
 
 U8G2_SSD1306_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
@@ -19,8 +15,13 @@ bool portaTocadaAnteriormente[12] = {false};
 unsigned long ultimaAlteracao = 0;
 unsigned long desligaTela = 0;
 int tela = 0;
+int hallValue;
 
-long encoderValue;
+void salvarAltura() {
+  EEPROM.begin(512); // Inicia a EEPROM
+  EEPROM.put(endereco, hallValue); // Grava a variável no endereço na EEPROM
+  EEPROM.commit(); // Finaliza o uso da EEPROM
+}
 
 void draw(void) {
     if (tela == 0){
@@ -36,7 +37,7 @@ void draw(void) {
     if(tela == 1){
       u8g2.setFont(u8g2_font_inb16_mr);
     // Centraliza o valor da variável no meio da tela
-    String variavelStr = String(encoderValue);
+    String variavelStr = String(hallValue);
     const char* variavelChar = variavelStr.c_str();
     // Combina as strings da variável e das setas
     String textoCompleto = variavelStr + "   " + altura ;
@@ -47,11 +48,11 @@ void draw(void) {
     u8g2.setDrawColor(1); // Define a cor do desenho como preto (1)
     u8g2.setDrawColor(2); // Define a espessura da linha como 2 pixels
     
-    if(encoderValue > altura){
+    if(hallValue > altura){
       u8g2.drawLine(53, 30, 63, 40); // Linha diagonal inferior da seta
       u8g2.drawLine(63, 40, 73, 30); // Linha diagonal superior da seta
     }
-     if (encoderValue < altura){
+     if (hallValue < altura){
       u8g2.drawLine(53, 40, 63, 30); // Linha diagonal superior invertida da seta
       u8g2.drawLine(63, 30, 73, 40); // Linha diagonal inferior invertida da seta
     }
@@ -72,9 +73,17 @@ void draw(void) {
 }
 
 void setup() {
-    //Serial.begin(115200);
-    //while (!Serial)
-       // ;
+  EEPROM.begin(512); // Inicia a EEPROM
+  EEPROM.get(endereco, hallValue); // Lê a variável do endereço na EEPROM
+  EEPROM.end();
+  Serial.print("Altura salva: ");
+  Serial.println(hallValue);
+
+    pinMode(12,OUTPUT);
+    pinMode(14,OUTPUT);
+
+    Serial.begin(115200);
+  
 
     Serial.println("MPR121 Capacitive Touch Test");
 
@@ -83,51 +92,46 @@ void setup() {
         while (1)
             ;
     }
-    touch.setThresholds(2, 0);  // Ajuste de limiar de toque e liberação
+    touch.setThresholds(2, 2);  // Ajuste de limiar de toque e liberação
 
     // Configurando os pinos do encoder
     pinMode(ENCODER_CLK_PIN, INPUT_PULLUP);
     pinMode(ENCODER_DT_PIN, INPUT_PULLUP);
 
-    encoder.attachHalfQuad(ENCODER_CLK_PIN, ENCODER_DT_PIN);
-
     u8g2.begin();
-    encoder.setCount(90);
     ultimaAlteracao = millis();
 }
 
 void loop() {
-    // Leitura do encoder
-     encoderValue = encoder.getCount();
-
-    // Exibir valores do encoder
-    //Serial.println("Encoder: " + String(encoderValue));
 
     // Verifica se houve uma mudança no estado de toque para qualquer porta
     uint16_t currentlyTouched = touch.touched();
     if (currentlyTouched != lastTouched) {
+    
       if (tela == 1){
-        altura = encoderValue;
+      
+        altura = hallValue;
       }
-      if(tela == 2){
-        tela = 0;
-      }
+      
         for (uint8_t i = 0; i < 12; i++) {
             // Verifica se a porta atual mudou de estado
             if ((currentlyTouched & (1 << i)) != (lastTouched & (1 << i))) {
+             
                 if (currentlyTouched & (1 << i)) {
-                    tela = 0; desligaTela = millis();
+              
                     // Porta está sendo tocada agora
                     portaTocadaAnteriormente[i] = true;
 
                     // Determina a direção do toque
                     if (i > 0 && i < 11) {
                         // Transição em outras portas
-                        if (portaTocadaAnteriormente[i - 1]) {
+                        if (portaTocadaAnteriormente[i - 1] && tela == 0) {
+                        
                             // Transição para uma porta maior (descendo)
                             if (altura > 55)
                                 altura -= 1;
-                        } else if (portaTocadaAnteriormente[i + 1]) {
+                        } else if (portaTocadaAnteriormente[i + 1] && tela == 0) {
+                          
                             // Transição para uma porta menor (subindo)
                             if (altura < 120)
                                 altura += 1;
@@ -136,8 +140,14 @@ void loop() {
                     // Atualiza o tempo da última alteração
                     ultimaAlteracao = millis();
                 } else {
+                    
                     // Porta não está mais sendo tocada
                     portaTocadaAnteriormente[i] = false;
+                    tela = 0; desligaTela = millis();
+                    if(tela == 2){
+                     
+                      tela = 0;
+                    }
                 }
             }
         }
@@ -150,30 +160,45 @@ void loop() {
     } while (u8g2.nextPage());
 
     // Verifica se passaram 5 segundos desde a última alteração
-    if (millis() - ultimaAlteracao > 1000 && encoderValue != altura ) {
+    if (millis() - ultimaAlteracao > 1250 && hallValue != altura ) {
         tela = 1;
         
     }
 
-    if(encoderValue < altura && tela == 1){
-      Serial.println("Mesa subindo");
+    if(hallValue < altura && tela == 1){
+      mesaUp();
       desligaTela = millis();
     }
-    if(encoderValue > altura && tela == 1){
-      Serial.println("Mesa descendo");
+    if(hallValue > altura && tela == 1){
+      mesaDown();
       desligaTela = millis();
     }
-    if(encoderValue == altura && tela == 1){
+    if(hallValue == altura && tela == 1){
       tela = 0;
       desligaTela = millis();
-      Serial.println("Mesa parada");
+      mesaStop();
     }
-    if (millis() - desligaTela > 5000 && tela == 0) {
+    if (millis() - desligaTela > 3000 && tela == 0) {
         tela = 2;
-        Serial.println("Apagando display");
+
     }
-    Serial.print(tela);
-    Serial.print("   ");
+    
+    
+}
+
+void mesaUp(){
+  digitalWrite(12,HIGH);
+  salvarAltura();
+}
+
+void mesaDown(){
+  digitalWrite(14,HIGH);
+  salvarAltura();
+}
+void mesaStop(){
+  digitalWrite(12,LOW);
+  digitalWrite(14,LOW);
+
 }
 
 
