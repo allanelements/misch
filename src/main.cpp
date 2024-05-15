@@ -89,8 +89,7 @@ void setup() {
 
     if (!touch.begin()) {
         Serial.println("Error initializing MPR121");
-        while (1)
-            ;
+        while (1);
     }
     touch.setThresholds(2, 2);  // Ajuste de limiar de toque e liberação
 
